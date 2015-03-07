@@ -8,45 +8,88 @@ import (
 	"io/ioutil"
 )
 
-var SpliceMarker = [13]byte{'S', 'P', 'L', 'I', 'C', 'E'}
+// Format of the file
+//
+// Byte order: little endian
+//
+// File header:
+//
+//	Format: 13 bytes, 0 padded
+//	Total data length: 1 byte
+//	Writer version: 32 bytes, 0 padded
+//	Tempo (bpm): 4 bytes, float
+//	Tracks
+//
+// Track format:
+//
+//	Track id: 32 bit unsigned int
+//	Track name lenght: 1 byte
+//	Track name: n bytes, as indicated by previous field
+//	Data: 16 bytes, 1 byte per step
 
 const (
-	FormatFieldBytes     = 13
-	DataLengthFieldBytes = 1
-	VersionFieldBytes    = 32
-	TempoFieldBytes      = 4
-	HeaderBytes          = FormatFieldBytes + DataLengthFieldBytes
-	TracksOffset         = HeaderBytes + VersionFieldBytes + TempoFieldBytes
+	formatFieldBytes     = 13
+	dataLengthFieldBytes = 1
+	headerBytes          = formatFieldBytes + dataLengthFieldBytes
+	versionFieldBytes    = 32
+	tempoFieldBytes      = 4
+	tracksOffset         = headerBytes + versionFieldBytes + tempoFieldBytes
+)
+
+var (
+	spliceByteOrder = binary.LittleEndian
+	spliceMarker    = [formatFieldBytes]byte{'S', 'P', 'L', 'I', 'C', 'E'}
 )
 
 // DecodeFile decodes the drum machine file found at the provided path
 // and returns a pointer to a parsed pattern which is the entry point to the
 // rest of the data.
 func DecodeFile(path string) (*Pattern, error) {
-	b, err := ioutil.ReadFile(path)
+	input, err := ioutil.ReadFile(path)
 	if err != nil {
 		return nil, err
 	}
 
-	buf := bytes.NewReader(b)
-	byteorder := binary.LittleEndian
+	p, datalen, err := readHeader(input)
+
+	if err != nil {
+		return nil, err
+	}
+
+	if p.Tracks, err = readTracks(input[tracksOffset : headerBytes+datalen]); err != nil {
+		return nil, err
+	}
+
+	return p, nil
+}
+
+// readHeader decodes the drum machine file's header.
+//
+// "input" should contain the entire file, as this function will
+// validate that the data length indicated in the file does not exceed
+// the file's actual size.
+//
+// It returns the Pattern filled with Version and Tempo, and the data
+// length indicated in the header.
+func readHeader(input []byte) (*Pattern, int, error) {
+	buf := bytes.NewReader(input)
 
 	header := struct {
-		Format     [FormatFieldBytes]byte
-		DataLength uint8 // there seems to be a single byte with the length
-		Writer     [VersionFieldBytes]byte
+		Format     [formatFieldBytes]byte
+		DataLength uint8
+		Writer     [versionFieldBytes]byte
 		Tempo      float32
 	}{}
 
-	binary.Read(buf, byteorder, &header)
+	binary.Read(buf, spliceByteOrder, &header)
 
-	if SpliceMarker != header.Format {
-		return nil, errors.New("Bad format")
+	if spliceMarker != header.Format {
+		return nil, 0, errors.New("Bad format")
 	}
 
-	if l := len(b); l < int(header.DataLength) {
-		err := errors.New(fmt.Sprintf("Not enough data in file: %d vs %d", l, header.DataLength))
-		return nil, err
+	if n, expected := len(input), headerBytes+int(header.DataLength); n < expected {
+		err := errors.New(fmt.Sprintf("Not enough data in file: %d vs %d", n, expected))
+		return nil, 0, err
 	}
 
 	n := bytes.Index(header.Writer[:], []byte{0})
@@ -55,41 +98,49 @@ func DecodeFile(path string) (*Pattern, error) {
 		Tempo:   header.Tempo,
 	}
 
-	// Rebuild the buffer to limit to the amount of data that the file says is there
-	buf = bytes.NewReader(b[TracksOffset : HeaderBytes+header.DataLength])
+	return p, int(header.DataLength), nil
+}
+
+// readtracks will decode the track information contained in the drum
+// machine file.
+//
+// "input" should contain the entire track data
+func readTracks(input []byte) ([]Track, error) {
+	buf := bytes.NewReader(input)
+
+	tracks := []Track{}
 
 	for {
-		trackHeader := struct {
-			Id      uint8
-			_       [3]byte
+		header := struct {
+			Id      uint32
 			NameLen uint8
 		}{}
 
-		if err := binary.Read(buf, byteorder, &trackHeader); err != nil {
+		if err := binary.Read(buf, spliceByteOrder, &header); err != nil {
 			if err.Error() == "EOF" {
 				break
 			}
 			return nil, err
 		}
 
-		name := make([]byte, trackHeader.NameLen)
-		if err := binary.Read(buf, byteorder, &name); err != nil {
+		name := make([]byte, header.NameLen)
+		if err := binary.Read(buf, spliceByteOrder, &name); err != nil {
 			return nil, err
 		}
 
 		track := Track{
-			Id:   int(trackHeader.Id),
+			Id:   int(header.Id),
 			Name: string(name),
 		}
 
-		if err := binary.Read(buf, byteorder, &track.Data); err != nil {
+		if err := binary.Read(buf, spliceByteOrder, &track.Data); err != nil {
 			return nil, err
 		}
 
-		p.Tracks = append(p.Tracks, track)
+		tracks = append(tracks, track)
 	}
 
-	return p, nil
+	return tracks, nil
 }
 
 // Pattern is the high level representation of the
