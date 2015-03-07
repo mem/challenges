@@ -68,7 +68,7 @@ Tempo: 999
 		if fmt.Sprint(decoded) != exp.output {
 			t.Logf("decoded:\n%#v\n", fmt.Sprint(decoded))
 			t.Logf("expected:\n%#v\n", exp.output)
-			t.Fatalf("%s wasn't decoded as expect.\nGot:\n%s\nExpected:\n%s",
+			t.Errorf("%s wasn't decoded as expect.\nGot:\n%s\nExpected:\n%s",
 				exp.path, decoded, exp.output)
 		}
 	}
