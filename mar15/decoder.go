@@ -87,7 +87,7 @@ func readHeader(input []byte) (*Pattern, int, error) {
 	}
 
 	if n, expected := len(input), headerBytes+int(header.DataLength); n < expected {
-		err := errors.New(fmt.Sprintf("Not enough data in file: %d vs %d", n, expected))
+		err := fmt.Errorf("Not enough data in file: %d vs %d", n, expected)
 		return nil, 0, err
 	}
 
@@ -111,7 +111,7 @@ func readTracks(input []byte) ([]Track, error) {
 
 	for {
 		header := struct {
-			Id      uint32
+			ID      uint32
 			NameLen uint8
 		}{}
 
@@ -128,7 +128,7 @@ func readTracks(input []byte) ([]Track, error) {
 		}
 
 		track := Track{
-			Id:   int(header.Id),
+			ID:   int(header.ID),
 			Name: string(name),
 		}
 

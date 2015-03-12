@@ -21,16 +21,18 @@ func (p *Pattern) String() string {
 	return s
 }
 
+// Track describes a single track contained in a .splice file
 type Track struct {
-	Id   int
+	ID   int
 	Name string
 	Data Steps
 }
 
 func (t Track) String() string {
-	return fmt.Sprintf("(%d) %s\t%s", t.Id, t.Name, t.Data)
+	return fmt.Sprintf("(%d) %s\t%s", t.ID, t.Name, t.Data)
 }
 
+// Steps represents the 16 steps that correspond to a single track.
 type Steps [16]byte
 
 func (s Steps) String() string {
