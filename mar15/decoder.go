@@ -5,7 +5,8 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
-	"io/ioutil"
+	"io"
+	"os"
 )
 
 // Format of the file
@@ -45,17 +46,30 @@ var (
 // and returns a pointer to a parsed pattern which is the entry point to the
 // rest of the data.
 func DecodeFile(path string) (*Pattern, error) {
-	input, err := ioutil.ReadFile(path)
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+
+	s, err := f.Stat()
 	if err != nil {
 		return nil, err
 	}
 
-	p, datalen, err := readHeader(input)
+	p, datalen, err := readHeader(f, s.Size())
 	if err != nil {
 		return nil, err
 	}
 
-	if p.Tracks, err = readTracks(input[tracksOffset : headerBytes+datalen]); err != nil {
+	// the DataLength field in the file includes the lenghts of the
+	// version and the tempo fields. Reading the header has already
+	// consumed those two fields
+	datalen -= versionFieldBytes + tempoFieldBytes
+
+	r := io.LimitReader(f, datalen)
+
+	if p.Tracks, err = readTracks(r); err != nil {
 		return nil, err
 	}
 
@@ -64,15 +78,15 @@ func DecodeFile(path string) (*Pattern, error) {
 
 // readHeader decodes the drum machine file's header.
 //
-// "input" should contain the entire file, as this function will
-// validate that the data length indicated in the file does not exceed
-// the file's actual size.
+// "r" is positioned at the start of the file.
+//
+// "s" is the total bytes available from the reader. It is used to
+// validate that the data length indicated in the file does not go past
+// the information available from the reader.
 //
 // It returns the Pattern filled with Version and Tempo, and the data
 // length indicated in the header.
-func readHeader(input []byte) (*Pattern, int, error) {
-	buf := bytes.NewReader(input)
-
+func readHeader(r io.Reader, s int64) (*Pattern, int64, error) {
 	header := struct {
 		Format     [formatFieldBytes]byte
 		DataLength uint8
@@ -80,14 +94,14 @@ func readHeader(input []byte) (*Pattern, int, error) {
 		Tempo      float32
 	}{}
 
-	binary.Read(buf, spliceByteOrder, &header)
+	binary.Read(r, spliceByteOrder, &header)
 
 	if spliceMarker != header.Format {
 		return nil, 0, errors.New("Bad format")
 	}
 
-	if n, expected := len(input), headerBytes+int(header.DataLength); n < expected {
-		err := fmt.Errorf("Not enough data in file: %d vs %d", n, expected)
+	if expected := headerBytes + int64(header.DataLength); s < expected {
+		err := fmt.Errorf("Not enough data in file: %d vs %d", s, expected)
 		return nil, 0, err
 	}
 
@@ -97,16 +111,14 @@ func readHeader(input []byte) (*Pattern, int, error) {
 		Tempo:   header.Tempo,
 	}
 
-	return p, int(header.DataLength), nil
+	return p, int64(header.DataLength), nil
 }
 
 // readtracks will decode the track information contained in the drum
 // machine file.
 //
 // "input" should contain the entire track data
-func readTracks(input []byte) ([]Track, error) {
-	buf := bytes.NewReader(input)
-
+func readTracks(r io.Reader) ([]Track, error) {
 	tracks := []Track{}
 
 	for {
@@ -115,7 +127,7 @@ func readTracks(input []byte) ([]Track, error) {
 			NameLen uint8
 		}{}
 
-		if err := binary.Read(buf, spliceByteOrder, &header); err != nil {
+		if err := binary.Read(r, spliceByteOrder, &header); err != nil {
 			if err.Error() == "EOF" {
 				break
 			}
@@ -123,7 +135,7 @@ func readTracks(input []byte) ([]Track, error) {
 		}
 
 		name := make([]byte, header.NameLen)
-		if err := binary.Read(buf, spliceByteOrder, &name); err != nil {
+		if err := binary.Read(r, spliceByteOrder, &name); err != nil {
 			return nil, err
 		}
 
@@ -132,7 +144,7 @@ func readTracks(input []byte) ([]Track, error) {
 			Name: string(name),
 		}
 
-		if err := binary.Read(buf, spliceByteOrder, &track.Data); err != nil {
+		if err := binary.Read(r, spliceByteOrder, &track.Data); err != nil {
 			return nil, err
 		}
 
