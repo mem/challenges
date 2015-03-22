@@ -114,6 +114,20 @@ func readHeader(r io.Reader, s int64) (*Pattern, int64, error) {
 	return p, int64(header.DataLength), nil
 }
 
+type trackReader struct {
+	r     io.Reader
+	order binary.ByteOrder
+	err   error
+}
+
+func (t *trackReader) Read(data interface{}) {
+	if t.err != nil {
+		return
+	}
+
+	t.err = binary.Read(t.r, t.order, data)
+}
+
 // readtracks will decode the track information contained in the drum
 // machine file.
 //
@@ -121,34 +135,27 @@ func readHeader(r io.Reader, s int64) (*Pattern, int64, error) {
 func readTracks(r io.Reader) ([]Track, error) {
 	tracks := []Track{}
 
-	for {
+	t := &trackReader{r: r, order: spliceByteOrder}
+
+	for t.err == nil {
 		header := struct {
 			ID      uint32
 			NameLen uint8
 		}{}
-
-		if err := binary.Read(r, spliceByteOrder, &header); err != nil {
-			if err.Error() == "EOF" {
-				break
-			}
-			return nil, err
-		}
+		t.Read(&header)
 
 		name := make([]byte, header.NameLen)
-		if err := binary.Read(r, spliceByteOrder, &name); err != nil {
-			return nil, err
-		}
+		t.Read(&name)
 
 		track := Track{
 			ID:   int(header.ID),
 			Name: string(name),
 		}
+		t.Read(&track.Data)
 
-		if err := binary.Read(r, spliceByteOrder, &track.Data); err != nil {
-			return nil, err
+		if t.err == nil {
+			tracks = append(tracks, track)
 		}
-
-		tracks = append(tracks, track)
 	}
 
 	return tracks, nil
