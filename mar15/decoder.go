@@ -117,7 +117,7 @@ func readHeader(r io.Reader, s int64) (*Pattern, int64, error) {
 // readtracks will decode the track information contained in the drum
 // machine file.
 //
-// "input" should contain the entire track data
+// "r" should point at the start of the track data
 func readTracks(r io.Reader) ([]Track, error) {
 	tracks := []Track{}
 
