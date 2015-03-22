@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"encoding/binary"
 	"errors"
-	"fmt"
 	"io"
 	"os"
 )
@@ -38,8 +37,10 @@ const (
 )
 
 var (
-	spliceByteOrder = binary.LittleEndian
-	spliceMarker    = [formatFieldBytes]byte{'S', 'P', 'L', 'I', 'C', 'E'}
+	spliceByteOrder      = binary.LittleEndian
+	spliceMarker         = [formatFieldBytes]byte{'S', 'P', 'L', 'I', 'C', 'E'}
+	ErrInvalidFileFormat = errors.New("Bad format")
+	ErrInsufficientData  = errors.New("file is shorter than expected")
 )
 
 // DecodeFile decodes the drum machine file found at the provided path
@@ -76,6 +77,16 @@ func DecodeFile(path string) (*Pattern, error) {
 	return p, nil
 }
 
+// getVersionAsString returns a string representation of the version
+// header.
+func getVersionAsString(writer []byte) string {
+	n := bytes.Index(writer, []byte{0})
+	if n == -1 {
+		n = len(writer)
+	}
+	return string(writer[:n])
+}
+
 // readHeader decodes the drum machine file's header.
 //
 // "r" is positioned at the start of the file.
@@ -94,20 +105,20 @@ func readHeader(r io.Reader, s int64) (*Pattern, int64, error) {
 		Tempo      float32
 	}{}
 
-	binary.Read(r, spliceByteOrder, &header)
-
-	if spliceMarker != header.Format {
-		return nil, 0, errors.New("Bad format")
-	}
-
-	if expected := headerBytes + int64(header.DataLength); s < expected {
-		err := fmt.Errorf("Not enough data in file: %d vs %d", s, expected)
+	if err := binary.Read(r, spliceByteOrder, &header); err != nil {
 		return nil, 0, err
 	}
 
-	n := bytes.Index(header.Writer[:], []byte{0})
+	if spliceMarker != header.Format {
+		return nil, 0, ErrInvalidFileFormat
+	}
+
+	if expected := headerBytes + int64(header.DataLength); s < expected {
+		return nil, 0, ErrInsufficientData
+	}
+
 	p := &Pattern{
-		Version: string(header.Writer[:n]),
+		Version: getVersionAsString(header.Writer[:]),
 		Tempo:   header.Tempo,
 	}
 

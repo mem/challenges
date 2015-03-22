@@ -2,7 +2,11 @@ package drum
 
 import (
 	"fmt"
+	"io"
+	"os"
 	"path"
+	"reflect"
+	"syscall"
 	"testing"
 )
 
@@ -13,6 +17,17 @@ func TestDecodeFile(t *testing.T) {
 	}{
 		{"pattern_1.splice",
 			`Saved with HW Version: 0.808-alpha
+Tempo: 120
+(0) kick	|x---|x---|x---|x---|
+(1) snare	|----|x---|----|x---|
+(2) clap	|----|x-x-|----|----|
+(3) hh-open	|--x-|--x-|x-x-|--x-|
+(4) hh-close	|x---|x---|----|x--x|
+(5) cowbell	|----|----|--x-|----|
+`,
+		},
+		{"long_version.splice",
+			`Saved with HW Version: 0.808-alpha.....................
 Tempo: 120
 (0) kick	|x---|x---|x---|x---|
 (1) snare	|----|x---|----|x---|
@@ -70,6 +85,37 @@ Tempo: 999
 			t.Logf("expected:\n%#v\n", exp.output)
 			t.Errorf("%s wasn't decoded as expect.\nGot:\n%s\nExpected:\n%s",
 				exp.path, decoded, exp.output)
+		}
+	}
+}
+
+func TestDecodeFileWithErrors(t *testing.T) {
+	tData := []struct {
+		path string
+		err  error
+	}{
+		{
+			"non_existent.splice",
+			&os.PathError{Op: "open", Path: "fixtures/non_existent.splice", Err: syscall.ENOENT},
+		},
+		{
+			"invalid_format.splice",
+			ErrInvalidFileFormat,
+		},
+		{
+			"short_header.splice",
+			io.ErrUnexpectedEOF,
+		},
+		{
+			"short_file.splice",
+			ErrInsufficientData,
+		},
+	}
+
+	for _, exp := range tData {
+		_, err := DecodeFile(path.Join("fixtures", exp.path))
+		if !reflect.DeepEqual(err, exp.err) {
+			t.Fatalf("Unexpected error %#v, expecting %#v", err, exp.err)
 		}
 	}
 }
