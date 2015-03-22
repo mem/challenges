@@ -1,22 +1,18 @@
 package main
 
 import (
-        "crypto/rand"
         "fmt"
         "io"
+        "io/ioutil"
         "net"
         "testing"
-
-        "golang.org/x/crypto/nacl/box"
 )
 
-func TestReadWriter(t *testing.T) {
-        priv, pub, err := box.GenerateKey(rand.Reader)
-        if err != nil {
-                t.Fatal(err)
-        }
+func TestReadWriterPing(t *testing.T) {
+        priv, pub := &[32]byte{'p', 'r', 'i', 'v'}, &[32]byte{'p', 'u', 'b'}
 
         r, w := io.Pipe()
+        defer w.Close()
         secureR := NewSecureReader(r, priv, pub)
         secureW := NewSecureWriter(w, priv, pub)
 
@@ -29,26 +25,57 @@ func TestReadWriter(t *testing.T) {
         if err != nil {
                 t.Fatal(err)
         }
+        buf = buf[:n]
+
         // Make sure we have hello world back
-        if res := string(buf[:n]); res != "hello world\n" {
+        if res := string(buf); res != "hello world\n" {
                 t.Fatalf("Unexpected result: %s != %s", res, "hello world")
         }
+}
+
+func TestSecureWriter(t *testing.T) {
+        priv, pub := &[32]byte{'p', 'r', 'i', 'v'}, &[32]byte{'p', 'u', 'b'}
+
+        r, w := io.Pipe()
+        secureW := NewSecureWriter(w, priv, pub)
 
         // Make sure we are secure
         // Encrypt hello world
-        go fmt.Fprintf(secureW, "hello world\n")
+        go func() {
+                fmt.Fprintf(secureW, "hello world\n")
+                w.Close()
+        }()
 
         // Read from the underlying transport instead of the decoder
-        buf = make([]byte, 1024)
-        n, err = r.Read(buf)
+        buf, err := ioutil.ReadAll(r)
         if err != nil {
                 t.Fatal(err)
         }
-
         // Make sure we dont' read the plain text message.
-        if res := string(buf[:n]); res == "hello world\n" {
+        if res := string(buf); res == "hello world\n" {
                 t.Fatal("Unexpected result. The message is not encrypted.")
         }
+
+        r, w = io.Pipe()
+        secureW = NewSecureWriter(w, priv, pub)
+
+        // Make sure we are unique
+        // Encrypt hello world
+        go func() {
+                fmt.Fprintf(secureW, "hello world\n")
+                w.Close()
+        }()
+
+        // Read from the underlying transport instead of the decoder
+        buf2, err := ioutil.ReadAll(r)
+        if err != nil {
+                t.Fatal(err)
+        }
+        // Make sure we dont' read the plain text message.
+        if string(buf) == string(buf2) {
+                t.Fatal("Unexpected result. The encrypted message is not unique.")
+        }
+
 }
 
 func TestSecureEchoServer(t *testing.T) {
@@ -130,14 +157,15 @@ func TestSecureDial(t *testing.T) {
                         }
                         go func(c net.Conn) {
                                 defer c.Close()
-                                c.Write([]byte("65537|83330641294328149214238194321849321843219483219483291483219438214129483219874\n"))
+                                key := [32]byte{}
+                                c.Write(key[:])
                                 buf := make([]byte, 2048)
                                 n, err := c.Read(buf)
                                 if err != nil {
                                         t.Fatal(err)
                                 }
                                 if got := string(buf[:n]); got == "hello world\n" {
-                                        t.Fatal("Unexpected result. Got raw data instead of serialized key")
+                                        t.Fatal("Unexpected result. Got raw data instead of encrypted")
                                 }
                         }(conn)
                 }
