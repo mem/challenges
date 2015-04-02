@@ -14,7 +14,13 @@ func TestReadWriterPing(t *testing.T) {
 	r, w := io.Pipe()
 	defer w.Close()
 	secureR := NewSecureReader(r, priv, pub)
+	if secureR == nil {
+		t.Fatalf("Failed to create a SecureReader")
+	}
 	secureW := NewSecureWriter(w, priv, pub)
+	if secureW == nil {
+		t.Fatalf("Failed to create a SecureWriter")
+	}
 
 	// Encrypt hello world
 	go fmt.Fprintf(secureW, "hello world\n")
@@ -38,6 +44,9 @@ func TestSecureWriter(t *testing.T) {
 
 	r, w := io.Pipe()
 	secureW := NewSecureWriter(w, priv, pub)
+	if secureW == nil {
+		t.Fatalf("Failed to create a SecureWriter")
+	}
 
 	// Make sure we are secure
 	// Encrypt hello world
@@ -58,6 +67,9 @@ func TestSecureWriter(t *testing.T) {
 
 	r, w = io.Pipe()
 	secureW = NewSecureWriter(w, priv, pub)
+	if secureW == nil {
+		t.Fatalf("Failed to create a SecureWriter")
+	}
 
 	// Make sure we are unique
 	// Encrypt hello world
@@ -126,6 +138,8 @@ func TestSecureServe(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer conn.Close()
+
 	unexpected := "hello world\n"
 	if _, err := fmt.Fprintf(conn, unexpected); err != nil {
 		t.Fatal(err)
