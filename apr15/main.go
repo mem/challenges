@@ -1,53 +1,12 @@
 package main
 
 import (
-	"errors"
 	"flag"
 	"fmt"
-	"io"
 	"log"
 	"net"
 	"os"
 )
-
-// NewSecureReader instantiates a new SecureReader
-func NewSecureReader(r io.Reader, priv, pub *[32]byte) io.Reader {
-	return nil
-}
-
-// NewSecureWriter instantiates a new SecureWriter
-func NewSecureWriter(w io.Writer, priv, pub *[32]byte) io.Writer {
-	return nil
-}
-
-// Dial generates a private/public key pair,
-// connects to the server, perform the handshake
-// and return a reader/writer.
-func Dial(addr string) (io.ReadWriteCloser, error) {
-	return nil, errors.New("Not implemented")
-}
-
-// Serve starts a secure echo server on the given listener.
-func Serve(l net.Listener) error {
-	go func() {
-		for {
-			if conn, err := l.Accept(); conn != nil && err == nil {
-				var buf [32 * 1024]byte
-				n, err := conn.Read(buf[0:])
-				if err != nil {
-					log.Println("failed to read from connection", err)
-				}
-				conn.Write(buf[:n])
-			} else if conn == nil {
-				// listener closed?
-				return
-			} else {
-				fmt.Println(err)
-			}
-		}
-	}()
-	return errors.New("Not implemented")
-}
 
 func main() {
 	port := flag.Int("l", 0, "Listen mode. Specify port")
