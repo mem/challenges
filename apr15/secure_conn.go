@@ -12,7 +12,10 @@ import (
 
 // protocolHandshake is the string used to identify the protocol we are
 // trying to communicate with.
-var protocolHandshake = []byte("whispering gophers 1")
+var protocolHandshake = []byte("whispering gophers 1\n")
+
+// badHandshakeResponse is the string sent back to the client after an
+// unsucessful handshake
 var badHandshakeResponse = []byte("you shall not pass!")
 
 // ErrBadHandshake is the error emitted when there is a handshake error
@@ -63,8 +66,8 @@ func Dial(addr string) (io.ReadWriteCloser, error) {
 func Serve(l net.Listener) error {
 	for {
 		// server waiting for connection
-		switch conn, err := l.Accept(); {
-		case err == nil:
+		switch conn, err := l.Accept(); err {
+		case nil:
 			go serve(conn)
 		default:
 			return err
@@ -81,100 +84,96 @@ func serve(conn net.Conn) {
 		return
 	}
 
-	c := secureConn{
+	c := &secureConn{
 		r: NewSecureReader(conn, serverPriv, clientPub),
 		w: NewSecureWriter(conn, serverPriv, clientPub),
 		c: conn,
 	}
 
 	var buf [MaxMsgLen]byte
-	for {
-		n, err := c.Read(buf[0:])
-		if err != nil {
-			break
-		}
-		n, err = c.Write(buf[:n])
-		if err != nil {
-			break
-		}
+	rw := &CatchErrorReadWriter{rw: c}
+	for rw.err == nil {
+		n, _ := rw.Read(buf[0:])
+		rw.Write(buf[:n])
 	}
 	c.Close()
 }
 
 // serverHandshake performs the protocol handshake server-side
 func serverHandshake(c net.Conn) (*[32]byte, *[32]byte, error) {
+	// server generates public/private key pair
+	serverPub, serverPriv, err := box.GenerateKey(rand.Reader)
+
+	rw := &CatchErrorReadWriter{rw: c, err: err}
+
 	// client sends protocolHandshake
 	clientHandshake := make([]byte, len(protocolHandshake))
 
-	switch _, err := c.Read(clientHandshake); {
-	case err == io.EOF, err == io.ErrUnexpectedEOF:
-		// no data?
-		return nil, nil, io.ErrUnexpectedEOF
-	case err != nil:
-		// something else happened
-		return nil, nil, err
-	default:
-		if !bytes.Equal(protocolHandshake, clientHandshake) {
-			return nil, nil, ErrBadHandshake
-		}
+	rw.Read(clientHandshake)
+	if rw.err == nil && !bytes.Equal(protocolHandshake, clientHandshake) {
+		rw.err = ErrBadHandshake
 	}
 
-	// server generates public/private key pair, sends public to client
-	serverPub, serverPriv, err := box.GenerateKey(rand.Reader)
-	if err != nil {
-		return nil, nil, err
-	}
+	// XXX: Ideally, here we would send a response to the client to
+	// tell it that we are the thing it was expecting to connect to
+	// (e.g. SSH exchanging "SSH-2.0-...\n\r" between client and
+	// server). This cannot be done because TestSecureDial
+	// implements a server that upon accepting the connection,
+	// *writes* a key to the client, without reading anything from
+	// it. Because the way that test is written, when it *reads*
+	// from the connection, what it will actually read is
+	// protocolHandshake + the client's public key, therefore
+	// "verifying" that it is not getting the plaintext that the
+	// client is sending in the test. It could be forced by making
+	// the handshake reply 32 null bytes (which is what the test
+	// server is sending to the client), but that's stretching the
+	// thing a little too far.
 
-	if _, err := writeFull(c, serverPub[:]); err != nil {
-		return nil, nil, err
-	}
+	// sends public to client
+	writeFull(rw, serverPub[:])
 
 	// client generates public/private key pair, sends public to server
-	clientPub, err := receiveKey(c)
-	if err != nil {
-		return nil, nil, err
-	}
+	clientPub, _ := receiveKey(rw)
 
-	return serverPriv, clientPub, nil
+	return serverPriv, clientPub, rw.err
 }
 
 // clientHandshake performs the protocol handshake client-side
 func clientHandshake(c net.Conn) (*[32]byte, *[32]byte, error) {
+	// client generates public/private key pair
+	clientPub, clientPriv, err := box.GenerateKey(rand.Reader)
+
+	rw := &CatchErrorReadWriter{rw: c, err: err}
+
 	// client sends protocolHandshake
-	if _, err := writeFull(c, protocolHandshake); err != nil {
-		return nil, nil, err
-	}
+	writeFull(rw, protocolHandshake)
+
+	// XXX: Here we would read the handshake response from the
+	// server. See comment in serverHandshake as to why it's not
+	// done.
 
 	// server generates public/private key pair, sends public to client
-	serverPub, err := receiveKey(c)
-	if err != nil {
-		return nil, nil, err
-	}
+	serverPub, _ := receiveKey(rw)
 
-	// client generates public/private key pair, sends public to server
-	clientPub, clientPriv, err := box.GenerateKey(rand.Reader)
-	if err != nil {
-		return nil, nil, err
-	}
+	// client sends public to server
+	writeFull(rw, clientPub[:])
 
-	if _, err := writeFull(c, clientPub[:]); err != nil {
-		return nil, nil, err
-	}
-
-	return clientPriv, serverPub, nil
+	return clientPriv, serverPub, rw.err
 }
 
 // receiveKey receives one public or private key over the provider
 // reader
 func receiveKey(r io.Reader) (*[32]byte, error) {
 	key := [32]byte{}
-	switch _, err := io.ReadFull(r, key[:]); {
-	case err == io.EOF, err == io.ErrUnexpectedEOF:
+	switch _, err := io.ReadFull(r, key[:]); err {
+	case io.EOF, io.ErrUnexpectedEOF:
 		// no data?
 		return nil, io.ErrUnexpectedEOF
-	case err != nil:
+	default:
 		// something else happened
 		return nil, err
+	case nil:
+		// everything is ok
 	}
 
 	return &key, nil

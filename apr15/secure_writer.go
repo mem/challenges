@@ -26,7 +26,7 @@ type SecureWriter struct {
 // w is the underlying transport.
 // priv is our private key and pub is the other end's public key.
 func NewSecureWriter(w io.Writer, priv, pub *[32]byte) io.Writer {
-	s := &SecureWriter{w: w, out: make([]byte, 0, MaxMsgLen+box.Overhead)}
+	s := &SecureWriter{w: w, out: make([]byte, 0, 1024)}
 	box.Precompute(&s.key, pub, priv)
 	return s
 }

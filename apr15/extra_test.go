@@ -3,10 +3,10 @@ package main
 import (
 	"bytes"
 	"crypto/rand"
-	"fmt"
+	"encoding/binary"
+	"errors"
 	"io"
 	"io/ioutil"
-	"log"
 	"net"
 	"testing"
 
@@ -53,31 +53,7 @@ func makeTestReaderAndWriter(t *testing.T) (io.Reader, io.Writer, func(), func()
 	return wrapTestReaderAndWriter(t, r, w)
 }
 
-func TestMoreReadWriterPing(t *testing.T) {
-	r, w, rCloser, wCloser := makeTestReaderAndWriter(t)
-	defer rCloser()
-
-	// Encrypt hello world
-	go func() {
-		fmt.Fprintf(w, testPlaintext)
-		wCloser()
-	}()
-
-	// Decrypt message
-	buf := make([]byte, 1024)
-	n, err := r.Read(buf)
-	if err != nil {
-		t.Fatal(err)
-	}
-	buf = buf[:n]
-
-	// Make sure we have hello world back
-	if res := string(buf); res != testPlaintext {
-		t.Fatalf("Unexpected result: %s != %s", res, "hello world")
-	}
-}
-
-func TestMoreWriteClosedReader(t *testing.T) {
+func TestWriteClosedReader(t *testing.T) {
 	_, w, rCloser, wCloser := makeTestReaderAndWriter(t)
 	rCloser()
 	defer wCloser()
@@ -88,7 +64,7 @@ func TestMoreWriteClosedReader(t *testing.T) {
 	}
 }
 
-func TestMoreWriteClosedWriter(t *testing.T) {
+func TestWriteClosedWriter(t *testing.T) {
 	_, w, rCloser, wCloser := makeTestReaderAndWriter(t)
 	defer rCloser()
 	wCloser()
@@ -99,7 +75,7 @@ func TestMoreWriteClosedWriter(t *testing.T) {
 	}
 }
 
-func TestMoreReadClosedReader(t *testing.T) {
+func TestReadClosedReader(t *testing.T) {
 	r, _, rCloser, wCloser := makeTestReaderAndWriter(t)
 	rCloser()
 	defer wCloser()
@@ -110,7 +86,7 @@ func TestMoreReadClosedReader(t *testing.T) {
 	}
 }
 
-func TestMoreReadClosedWriter(t *testing.T) {
+func TestReadClosedWriter(t *testing.T) {
 	r, _, rCloser, wCloser := makeTestReaderAndWriter(t)
 	defer rCloser()
 	wCloser()
@@ -124,7 +100,7 @@ func TestMoreReadClosedWriter(t *testing.T) {
 	}
 }
 
-func TestMoreShortMessageRead(t *testing.T) {
+func TestShortMessageRead(t *testing.T) {
 	r, w := io.Pipe()
 
 	secureR, secureW, rCloser, wCloser := wrapTestReaderAndWriter(t, r, w)
@@ -165,7 +141,7 @@ func TestMoreShortMessageRead(t *testing.T) {
 	}
 }
 
-func TestMoreShortHeaderRead(t *testing.T) {
+func TestShortHeaderRead(t *testing.T) {
 	buf := bytes.NewBuffer(make([]byte, 0, 1024))
 
 	secureR, secureW, _, _ := wrapTestReaderAndWriter(t, buf, buf)
@@ -186,7 +162,7 @@ func TestMoreShortHeaderRead(t *testing.T) {
 	}
 }
 
-func TestMoreReaderDecryptionError(t *testing.T) {
+func TestReaderDecryptionError(t *testing.T) {
 	buf := bytes.NewBuffer(make([]byte, 0, 1024))
 
 	secureR, secureW, _, _ := wrapTestReaderAndWriter(t, buf, buf)
@@ -211,122 +187,174 @@ func TestMoreReaderDecryptionError(t *testing.T) {
 	}
 }
 
-func TestMoreSecureWriter(t *testing.T) {
-	priv, pub := makeTestKeys()
+func TestShortMessage(t *testing.T) {
+	buf := bytes.NewBuffer(make([]byte, 0, MsgOverhead))
 
-	r, w := io.Pipe()
-	secureW := NewSecureWriter(w, priv, pub)
-	if secureW == nil {
-		t.Fatalf("Failed to create a SecureWriter")
+	secureR, secureW, _, _ := wrapTestReaderAndWriter(t, buf, buf)
+
+	// Write a short message
+	switch n, err := secureW.Write([]byte{}); {
+	case err != nil:
+		t.Fatalf("Unexpected result: expecting no error, got %v.", err)
+	case n != 0:
+		t.Fatalf("Unexpected result: expecting 0 bytes written, got %d.", n)
 	}
 
-	// Make sure we are secure
-	// Encrypt hello world
-	go func() {
-		fmt.Fprintf(secureW, testPlaintext)
-		w.Close()
-	}()
+	msg := make([]byte, MsgOverhead)
 
-	// Read from the underlying transport instead of the decoder
-	buf, err := ioutil.ReadAll(r)
-	if err != nil {
-		t.Fatal(err)
-	}
-	// Make sure we dont' read the plain text message.
-	if res := string(buf); res == testPlaintext {
-		t.Fatal("Unexpected result. The message is not encrypted.")
-	}
-
-	r, w = io.Pipe()
-	secureW = NewSecureWriter(w, priv, pub)
-	if secureW == nil {
-		t.Fatalf("Failed to create a SecureWriter")
-	}
-
-	// Make sure we are unique
-	// Encrypt hello world
-	go func() {
-		fmt.Fprintf(secureW, testPlaintext)
-		w.Close()
-	}()
-
-	// Read from the underlying transport instead of the decoder
-	buf2, err := ioutil.ReadAll(r)
-	if err != nil {
-		t.Fatal(err)
-	}
-	// Make sure we dont' read the plain text message.
-	if string(buf) == string(buf2) {
-		t.Fatal("Unexpected result. The encrypted message is not unique.")
+	// Read the short message
+	switch n, err := secureR.Read(msg); {
+	case err != nil:
+		t.Fatalf("Unexpected result: expecting no error, got %v.", err)
+	case n != 0:
+		t.Fatalf("Unexpected result: expecting 0 bytes read, got %d.", n)
 	}
 }
 
-func TestMoreSecureEchoServer(t *testing.T) {
+func TestLongMessage(t *testing.T) {
+	buf := bytes.NewBuffer(make([]byte, 0))
+
+	secureR, secureW, _, _ := wrapTestReaderAndWriter(t, buf, buf)
+
+	msg := make([]byte, MaxMsgLen)
+
+	// Write a long message
+	switch n, err := secureW.Write(msg); {
+	case err != nil:
+		t.Fatalf("Unexpected result: expecting no error, got %v.", err)
+	case n != len(msg):
+		t.Fatalf("Unexpected result: expecting len(msg) bytes written, got %d.", n)
+	}
+
+	// Read the long message
+	switch n, err := secureR.Read(msg); {
+	case err != nil:
+		t.Fatalf("Unexpected result: expecting no error, got %q.", err)
+	case n != len(msg):
+		t.Fatalf("Unexpected result: expecting MaxMsgLen bytes read, got %d.", n)
+	}
+}
+
+func TestHugeRead(t *testing.T) {
+	header := struct {
+		DataLen int32
+		Nonce   [nonceLen]byte
+	}{
+		DataLen: MaxMsgLen + box.Overhead + 1,
+	}
+
+	buf := bytes.NewBuffer(make([]byte, 0))
+
+	secureR, _, _, _ := wrapTestReaderAndWriter(t, buf, buf)
+
+	if err := binary.Write(buf, binary.BigEndian, &header); err != nil {
+		t.Fatalf("Unexpected result: expecting no error, got %q.", err)
+	}
+
+	switch n, err := secureR.Read([]byte{}); {
+	case err != ErrMsgTooLarge:
+		t.Fatalf("Unexpected result: expecting ErrMsgTooLarge, got %q.", err)
+	case n != 0:
+		t.Fatalf("Unexpected result: no bytes should have been read, got %d.", n)
+	}
+}
+
+func TestHugeWrite(t *testing.T) {
+	buf := bytes.NewBuffer(make([]byte, 0))
+
+	_, secureW, _, _ := wrapTestReaderAndWriter(t, buf, buf)
+
+	msg := make([]byte, MaxMsgLen+1024)
+
+	// Write a long message
+	switch n, err := secureW.Write(msg); {
+	case err != ErrMsgTooLarge:
+		t.Fatalf("Unexpected result: expecting ErrMsgTooLarge, got %q.", err)
+	case n != 0:
+		t.Fatalf("Unexpected result: no bytes should have been written, got %d.", n)
+	}
+}
+
+func TestShortReadBuffer(t *testing.T) {
+	buf := bytes.NewBuffer(make([]byte, 0))
+
+	secureR, secureW, _, _ := wrapTestReaderAndWriter(t, buf, buf)
+
+	out := make([]byte, 32)
+
+	// Write a short message
+	switch n, err := secureW.Write(out); {
+	case err != nil:
+		t.Fatalf("Unexpected result: expecting no error, got %v.", err)
+	case n != len(out):
+		t.Fatalf("Unexpected result: expecting %d bytes written, got %d.", len(out), n)
+	}
+
+	in := make([]byte, 16)
+
+	// Read the short message
+	switch n, err := secureR.Read(in); {
+	case err != io.ErrShortBuffer:
+		t.Fatalf("Unexpected result: expecting io.ErrShortBuffer, got %v.", err)
+	case n != 0:
+		t.Fatalf("Unexpected result: expecting 0 bytes read, got %d.", n)
+	}
+}
+
+type WriterWrapper struct {
+	W io.Writer
+	N int
+}
+
+func (w *WriterWrapper) Write(p []byte) (int, error) {
+	if len(p) > w.N {
+		p = p[:w.N]
+	}
+
+	n, err := w.W.Write(p)
+	w.N -= n
+	if err == nil && w.N == 0 {
+		err = errors.New("Reached write limit")
+	}
+
+	return n, err
+}
+
+func TestWrappedWriteError(t *testing.T) {
+	buf := bytes.NewBuffer(make([]byte, 0))
+
+	w := &WriterWrapper{W: buf, N: MsgOverhead + 8}
+
+	_, secureW, _, _ := wrapTestReaderAndWriter(t, buf, w)
+
+	out := make([]byte, 2*w.N)
+
+	switch n, err := secureW.Write(out); {
+	case err == nil:
+		t.Fatalf("Unexpected result: expecting error, got %v.", err)
+	case n != 0:
+		t.Fatalf("Unexpected result: expecting 0 bytes written, got %d.", n)
+	}
+}
+
+func TestDialConnectionErrorHandling(t *testing.T) {
 	// Create a random listener
 	l, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer l.Close()
+	addr := l.Addr().String()
+	// close immediately to cause error in Dial
+	l.Close()
 
-	// Start the server
-	go Serve(l)
-
-	conn, err := Dial(l.Addr().String())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer conn.Close()
-
-	expected := testPlaintext
-	if _, err := fmt.Fprintf(conn, expected); err != nil {
-		log.Println("Client failed while sending greeting to server")
-		t.Fatal(err)
-	}
-
-	buf := make([]byte, 2048)
-	n, err := conn.Read(buf)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	if got := string(buf[:n]); got != expected {
-		t.Fatalf("Unexpected result:\nGot:\t\t%s\nExpected:\t%s\n", got, expected)
+	conn, err := Dial(addr)
+	if err == nil {
+		t.Fatalf("Unexpected result: expecting error, got %v.", err)
+		conn.Close()
 	}
 }
 
-func TestMoreSecureServe(t *testing.T) {
-	// Create a random listener
-	l, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer l.Close()
-
-	// Start the server
-	go Serve(l)
-
-	conn, err := net.Dial("tcp", l.Addr().String())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer conn.Close()
-
-	unexpected := testPlaintext
-	if _, err := fmt.Fprintf(conn, unexpected); err != nil {
-		t.Fatal(err)
-	}
-	buf := make([]byte, 2048)
-	n, err := conn.Read(buf)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got := string(buf[:n]); got == unexpected {
-		t.Fatalf("Unexpected result:\nGot raw data instead of serialized key")
-	}
-}
-
-func TestMoreSecureDial(t *testing.T) {
+func TestDialHandshakeErrorHandling(t *testing.T) {
 	// Create a random listener
 	l, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -336,94 +364,48 @@ func TestMoreSecureDial(t *testing.T) {
 
 	// Start the server
 	go func(l net.Listener) {
-		for {
-			conn, err := l.Accept()
-			if err != nil {
-				return
-			}
-			go func(c net.Conn) {
-				defer c.Close()
-				var key [32]byte
-				c.Write(key[:])
-				buf := make([]byte, 2048)
-				n, err := c.Read(buf)
-				if err != nil {
-					t.Fatal(err)
-				}
-				if got := string(buf[:n]); got == testPlaintext {
-					t.Fatal("Unexpected result. Got raw data instead of encrypted")
-				}
-			}(conn)
+		conn, err := l.Accept()
+		if err != nil {
+			return
 		}
+		// don't do handshake, simply close the connection
+		conn.Close()
 	}(l)
 
 	conn, err := Dial(l.Addr().String())
+	if err == nil {
+		t.Fatalf("Unexpected result: expecting error, got %v.", err)
+		conn.Close()
+	}
+}
+
+func TestServerBadHandshake(t *testing.T) {
+	// Create a random listener
+	l, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer l.Close()
+
+	go Serve(l)
+
+	addr := l.Addr().String()
+	conn, err := net.Dial("tcp", addr)
+	if err != nil {
+		t.Fatalf("Unexpected result: expecting no error, got %v.", err)
+	}
 	defer conn.Close()
 
-	expected := testPlaintext
-	if _, err := fmt.Fprintf(conn, expected); err != nil {
-		t.Fatal(err)
-	}
-}
+	// send a bad handshake message
+	conn.Write(make([]byte, 32))
 
-func TestMoreShortMessage(t *testing.T) {
-	buf := bytes.NewBuffer(make([]byte, 0, MsgOverhead))
-
-	secureR, secureW, _, _ := wrapTestReaderAndWriter(t, buf, buf)
-
-	// Write a short message
-	if n, err := secureW.Write([]byte{}); err != nil {
-		t.Fatalf("Unexpected result: expecting no error, got %v.", err)
-	} else if n != 0 {
-		t.Fatalf("Unexpected result: expecting 0 bytes written, got %d.", n)
-	}
-
-	msg := make([]byte, MsgOverhead)
-
-	// Read the short message
-	if n, err := secureR.Read(msg); err != nil {
-		t.Fatalf("Unexpected result: expecting no error, got %v.", err)
-	} else if n != 0 {
-		t.Fatalf("Unexpected result: expecting 0 bytes read, got %d.", n)
-	}
-}
-
-func TestMoreLongMessage(t *testing.T) {
-	buf := bytes.NewBuffer(make([]byte, 0))
-
-	secureR, secureW, _, _ := wrapTestReaderAndWriter(t, buf, buf)
-
-	msg := make([]byte, MaxMsgLen)
-
-	// Write a long message
-	if n, err := secureW.Write(msg); err != nil {
-		t.Fatalf("Unexpected result: expecting no error, got %v.", err)
-	} else if n != len(msg) {
-		t.Fatalf("Unexpected result: expecting len(msg) bytes written, got %d.", n)
-	}
-
-	// Read the long message
-	if n, err := secureR.Read(msg); err != nil {
+	// read response
+	msg := make([]byte, 1024)
+	var n int
+	if n, err = conn.Read(msg); err != nil {
 		t.Fatalf("Unexpected result: expecting no error, got %q.", err)
-	} else if n != len(msg) {
-		t.Fatalf("Unexpected result: expecting MaxMsgLen bytes read, got %d.", n)
 	}
-}
-
-func TestMoreHugeMessage(t *testing.T) {
-	buf := bytes.NewBuffer(make([]byte, 0))
-
-	_, secureW, _, _ := wrapTestReaderAndWriter(t, buf, buf)
-
-	msg := make([]byte, MaxMsgLen+1024)
-
-	// Write a long message
-	if n, err := secureW.Write(msg); err == nil {
-		t.Fatalf("Unexpected result: expecting error, got %v.", err)
-	} else if n != 0 {
-		t.Fatalf("Unexpected result: no bytes should have been written, got %d.", n)
+	if !bytes.Equal(msg[:n], badHandshakeResponse) {
+		t.Fatalf("Unexpected result: expecting bad handshake, got %q.", msg)
 	}
 }

@@ -24,7 +24,7 @@ type SecureReader struct {
 // r is the underlying transport.
 // priv is our private key and pub is the other end's public key.
 func NewSecureReader(r io.Reader, priv, pub *[32]byte) io.Reader {
-	s := &SecureReader{r: r, in: make([]byte, MaxMsgLen+box.Overhead)}
+	s := &SecureReader{r: r, in: make([]byte, 1024)}
 	box.Precompute(&s.key, pub, priv)
 	return s
 }
@@ -51,6 +51,10 @@ func (s *SecureReader) Read(p []byte) (int, error) {
 		return 0, err
 	}
 
+	if header.DataLen > MaxMsgLen+box.Overhead {
+		return 0, ErrMsgTooLarge
+	}
+
 	if int(header.DataLen) > cap(p)+box.Overhead {
 		// p does not have enough space to hold the decrypted
 		// message. Since we have already read the header, we
@@ -59,6 +63,9 @@ func (s *SecureReader) Read(p []byte) (int, error) {
 		return 0, io.ErrShortBuffer
 	}
 
+	if cap(s.in) < int(header.DataLen) {
+		s.in = make([]byte, header.DataLen)
+	}
 	s.in = s.in[:header.DataLen]
 	if _, err := io.ReadFull(s.r, s.in); err != nil {
 		return 0, err

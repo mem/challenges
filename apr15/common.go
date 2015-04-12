@@ -45,3 +45,28 @@ func writeFull(w io.Writer, p []byte) (int, error) {
 
 	return i, nil
 }
+
+type CatchErrorReadWriter struct {
+	rw  io.ReadWriter
+	err error
+}
+
+func (rw *CatchErrorReadWriter) Read(p []byte) (int, error) {
+	n := 0
+
+	if rw.err == nil {
+		n, rw.err = rw.rw.Read(p)
+	}
+
+	return n, rw.err
+}
+
+func (rw *CatchErrorReadWriter) Write(p []byte) (int, error) {
+	n := 0
+
+	if rw.err == nil {
+		n, rw.err = rw.rw.Write(p)
+	}
+
+	return n, rw.err
+}
